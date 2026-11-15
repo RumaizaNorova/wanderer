@@ -1,0 +1,84 @@
+{
+  "target": "1633",
+  "period": "2025W18_2B",
+  "release": "dr1",
+  "physical_jpl": {
+    "name": "1633 Chimay (1929 EC)",
+    "H": "10.64",
+    "diameter": "37.428",
+    "rot_per": "6.5911",
+    "albedo": "0.080",
+    "e": "0.129",
+    "a": "3.19",
+    "i": "2.67"
+  },
+  "reference_ssodnet": {
+    "taxonomy_class": "B",
+    "taxonomy_scheme": "Bus-DeMeo",
+    "taxonomy_waverange": "VIS",
+    "diameter_km": 46.05,
+    "albedo": 0.0462
+  },
+  "measurements": 65,
+  "lambda_range_um": [
+    0.7454251050949097,
+    4.533255100250244
+  ],
+  "snr_range": [
+    9.830687346461438,
+    44.48448723768864
+  ],
+  "refl_0p75_1p8_range": [
+    0.8210110326528609,
+    1.5518196400523805
+  ],
+  "colour_ratio_2p4_3p4_median": 1.1381527274205634,
+  "colour_ratio_by_block": {
+    "2025W18_2B_0027": 1.204,
+    "2025W18_2B_0131": 1.126,
+    "2025W18_2B_0246": 1.131,
+    "2025W18_2B_0266": 1.101,
+    "2025W18_2B_0430": 1.247
+  },
+  "refl_beyond_3p7_median": 2.078978881944613,
+  "position_offset_px_median": [
+    -5.551115123125783e-17,
+    -5.551115123125783e-17
+  ],
+  "rotation": {
+    "pairs": 26,
+    "scatter_mag": 0.20778969410831108,
+    "max_abs_mag": 0.49502639119068653
+  },
+  "taxonomy": {
+    "best_class": "B",
+    "best_chi2_red": 2.251950226909374,
+    "complex_ranking": {
+      "C": 2.25,
+      "S": 3.65,
+      "X": 4.07,
+      "D": 6.75
+    },
+    "top3": [
+      {
+        "class": "B",
+        "chi2_red": 2.25
+      },
+      {
+        "class": "L",
+        "chi2_red": 3.65
+      },
+      {
+        "class": "K",
+        "chi2_red": 3.93
+      }
+    ],
+    "points": 33,
+    "slope_0p85_1p7_per_um": -0.07558051830096121
+  },
+  "photometry": {
+    "chi2_dof_median": 1.3590782010973548,
+    "blended": 0,
+    "stars_modelled_total": 26
+  }
+}

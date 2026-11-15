@@ -1,0 +1,9 @@
+{
+  "gaia_stars": 3652,
+  "sources_used": 6585,
+  "matched": 2027,
+  "median_offset_arcsec": 0.7379928682352977,
+  "median_dra_arcsec": -0.17854172290634263,
+  "median_ddec_arcsec": 0.03607631240143405,
+  "pass_under_1arcsec": true
+}

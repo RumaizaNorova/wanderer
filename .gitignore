@@ -1,0 +1,25 @@
+# Environment
+.venv/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data: large, downloaded, or regenerable. Results tables and figures ARE committed.
+data/index/
+data/reference/
+data/cache/
+data/*.duckdb
+data/*.duckdb.wal
+*.fits
+*.fits.gz
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Per-exposure source catalogs are large and regenerable (keep the astrometry JSON)
+data/results/catalogs/**/*.csv
