@@ -113,6 +113,22 @@ def test_sexagesimal_formats_for_sb_ident():
     assert ephemeris._ra_sexagesimal(-15.0) == "23-00-00.00"
 
 
+def test_horizons_queries_are_small_body(monkeypatch):
+    """Regression: a bare '6' made Horizons return Saturn instead of asteroid (6) Hebe."""
+    seen = {}
+
+    class Fake:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def ephemerides(self):
+            return "eph"
+
+    monkeypatch.setattr(ephemeris, "Horizons", Fake)
+    assert ephemeris._horizons("6", "500", 2460798.5) == "eph"
+    assert seen["id_type"] == "smallbody" and seen["id"] == "6"
+
+
 # --- reflectance ------------------------------------------------------------------------------
 def test_sun_divided_by_sun_is_flat():
     grid = np.linspace(0.6, 5.2, 4600)

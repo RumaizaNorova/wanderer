@@ -40,11 +40,17 @@ def find_sightings(target: str, index: pd.DataFrame, margin: int = 8, workers: i
     if found and spacecraft_frame:
         # refine: positions as seen from SPHEREx at each exact exposure time
         times = sorted({r["mjd"] for r in found})
-        exact = ephemeris.positions_at_times(target, times).set_index(pd.Index(times))
-        refined = cand.assign(pra=exact.ra.reindex(cand.mjd).values, pdec=exact.dec.reindex(cand.mjd).values)
-        refined = refined[refined.key.isin({r["key"] for r in found})]
+        exact = ephemeris.positions_at_times(target, times)
+        # Horizons rounds the epochs it echoes, so map rows by position (same sorted order), not by value
+        lookup = dict(zip(times, zip(exact.ra.values, exact.dec.values)))
+        refined = cand[cand.key.isin({r["key"] for r in found})].copy()
+        refined["pra"] = [lookup[m][0] for m in refined.mjd]
+        refined["pdec"] = [lookup[m][1] for m in refined.mjd]
         with ThreadPoolExecutor(workers) as ex:
             found = [r for r in ex.map(locate, refined.itertuples()) if r]
+    if not found:
+        log.warning("%s: predicted track never falls on a detector in this index", target)
+        return pd.DataFrame(), track
     s = pd.DataFrame(found).sort_values(["mjd", "det"]).reset_index(drop=True)
     s["frame"] = "spherex" if spacecraft_frame else "geocentric"
     if len(s):

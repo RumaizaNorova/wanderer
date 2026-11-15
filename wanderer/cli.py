@@ -86,6 +86,10 @@ def cmd_run(a):
     s, track = sightings.find_sightings(a.target, idx, workers=a.workers)
     s.to_csv(out / "sightings.csv", index=False)
     track.to_csv(out / "track.csv", index=False)
+    if s.empty:
+        _dump({"target": a.target, "period": a.period, "status": "no sightings in this period"}, out / "summary.json")
+        print("no sightings: the object never falls on a detector in this period")
+        return
     print(f"sightings: {len(s)} on detectors {sorted(s.det.unique())} ({time.time() - t:.0f} s)")
     t = time.time()
     phot = photometry.forced_photometry(s)
@@ -105,7 +109,14 @@ def cmd_spectrum(a):
 
 
 def _spectrum(a, out, phot, track):
-    refl = reflectance.reflectance(phot, track)
+    try:
+        refl = reflectance.reflectance(phot, track)
+    except (ValueError, KeyError) as e:
+        n_ok = int((phot.get("status") == "ok").sum()) if "status" in phot else 0
+        _dump({"target": a.target, "period": a.period, "status": f"no spectrum: {e}", "measurements": n_ok,
+               "skipped": phot.get("status", pd.Series(dtype=str)).value_counts().to_dict()}, out / "summary.json")
+        print(f"no spectrum: {e}")
+        return
     refl.to_csv(out / "reflectance.csv", index=False)
     col = reflectance.simultaneous_colours(refl)
     col.to_csv(out / "colours.csv", index=False)
@@ -119,9 +130,15 @@ def _spectrum(a, out, phot, track):
             "reference_ssodnet": ephemeris.ssodnet_reference(a.target),
             **reflectance.summary(refl, col),
             "taxonomy": {"best_class": multi["class"].iloc[0], "best_chi2_red": float(multi.chi2_red.iloc[0]),
-                         "complex_ranking": tax.groupby("complex").chi2_red.min().sort_values().round(2).to_dict(),
+                         "complex_ranking": multi.groupby("complex").chi2_red.min().sort_values().round(2).to_dict(),
                          "top3": multi.head(3)[["class", "chi2_red"]].round(2).to_dict("records"),
                          "points": tax.attrs["n_points"], "slope_0p85_1p7_per_um": taxonomy.slope_per_um(rel.lam_um, rel.refl)}}
+    try:
+        from . import neatm
+        h = float(summ["physical_jpl"].get("H"))
+        summ["neatm"] = neatm.fit(refl, h)
+    except (TypeError, ValueError, KeyError) as e:
+        summ["neatm"] = {"status": f"skipped: {e}"}
     summ["photometry"] = {"chi2_dof_median": float(phot.chi2_dof.median()),
                           "blended": int(phot.get("blended", pd.Series(dtype=bool)).fillna(False).sum()),
                           "stars_modelled_total": int(phot.get("n_stars_modelled", pd.Series(dtype=float)).fillna(0).sum())}
@@ -158,6 +175,59 @@ def cmd_targets(a):
     sel.to_csv(out / "targets.csv", index=False)
     print(f"{ref.taxonomy_class.notna().sum()} have a published class; selected {len(sel)}:")
     print(sel[["number", "name", "vmag", "taxonomy_class", "complex", "diameter_km", "albedo"]].to_string(index=False))
+
+
+def cmd_validate(a):
+    """Run the pipeline on every validation target (in parallel subprocesses) and score agreement."""
+    import subprocess
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+    from . import validation
+    vdir = config.RESULTS_DIR / "validation" / a.period
+    targets = pd.read_csv(vdir / "targets.csv", dtype={"number": str})
+    logs = vdir / "logs"
+    logs.mkdir(exist_ok=True)
+
+    def run_one(num: str) -> tuple[str, int]:
+        if (config.RESULTS_DIR / num / a.period / "summary.json").exists() and not a.force:
+            return num, 0
+        with open(logs / f"{num}.log", "w") as f:
+            cmd = [sys.executable, "-m", "wanderer", "run", num, "--period", a.period, "--no-cutouts", "--workers", "8"]
+            return num, subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT).returncode
+
+    t = time.time()
+    with ThreadPoolExecutor(a.parallel) as ex:
+        for num, code in ex.map(run_one, targets.number):
+            print(f"{num}: {'ok' if code == 0 else f'FAILED (see logs/{num}.log)'}  [{time.time() - t:.0f} s]", flush=True)
+    report = validation.score(targets, a.period)
+    report.to_csv(vdir / "report.csv", index=False)
+    print(report.to_string(index=False))
+    ok = report.dropna(subset=["our_complex"])
+    print(f"\ncomplex agreement: {ok.complex_match.sum()}/{len(ok)} = {ok.complex_match.mean():.0%} (plan target 75%)")
+
+
+def cmd_groups(a):
+    """Leave-one-out validation of the albedo + colour group classifier."""
+    from . import validation
+    vdir = config.RESULTS_DIR / "validation" / a.period
+    targets = pd.read_csv(vdir / "targets.csv", dtype={"number": str})
+    for num in a.extra or []:
+        ref = ephemeris.ssodnet_reference(num)
+        cls = ref.get("taxonomy_class")
+        targets = pd.concat([targets, pd.DataFrame([{
+            "number": num, "name": ephemeris.physical_parameters(num)["name"], "taxonomy_class": cls,
+            "complex": validation._complex(cls) if cls else None,
+            "diameter_km": ref.get("diameter_km"), "albedo": ref.get("albedo")}])], ignore_index=True)
+    r = validation.group_report(targets, a.period)
+    r.to_csv(vdir / "groups.csv", index=False)
+    pd.set_option("display.width", 250)
+    print(r[["number", "name", "published_class", "published_complex", "published_albedo", "colour", "colour_pairs",
+             "eta_loo", "albedo", "diameter_km", "published_diameter_km", "group", "complex_match"]].round(3).to_string(index=False))
+    ok = r.dropna(subset=["group"])
+    print(f"\ngroup -> complex agreement: {ok.complex_match.sum()}/{len(ok)} = {ok.complex_match.mean():.0%} "
+          f"(classified {len(ok)}/{len(r)}; plan target 75%)")
+    d = r.dropna(subset=["d_ratio"])
+    print(f"diameter within 30% of published: {(abs(d.d_ratio - 1) < 0.3).sum()}/{len(d)}; median D ratio {d.d_ratio.median():.2f}")
 
 
 def cmd_cube_test(a):
@@ -207,6 +277,12 @@ def main(argv=None):
     q.add_argument("-n", type=int, default=20); q.set_defaults(fn=cmd_targets)
     q = sub.add_parser("spectrum", help="rebuild spectrum/taxonomy from saved photometry")
     q.add_argument("target"); q.add_argument("--period", required=True); q.set_defaults(fn=cmd_spectrum)
+    q = sub.add_parser("validate", help="run all validation targets and score taxonomy agreement")
+    q.add_argument("period"); q.add_argument("--parallel", type=int, default=3)
+    q.add_argument("--force", action="store_true", help="rerun targets that already have results"); q.set_defaults(fn=cmd_validate)
+    q = sub.add_parser("groups", help="leave-one-out validation of the albedo + colour classifier")
+    q.add_argument("period"); q.add_argument("--extra", nargs="*", help="more asteroid numbers to include")
+    q.set_defaults(fn=cmd_groups)
     q = sub.add_parser("cube-test"); q.add_argument("target"); q.add_argument("--period", required=True)
     q.add_argument("--det", type=int, default=1); q.set_defaults(fn=cmd_cube_test)
     a = p.parse_args(argv)

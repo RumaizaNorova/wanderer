@@ -73,6 +73,87 @@ def fit(lam, refl, err) -> pd.DataFrame:
     return res
 
 
+BLOCK_FIT_MAX_UM = 2.6     # templates end at 2.45 um; extended flat to 2.6 to use the bottom of detector 4
+MIN_LEVER_UM = 0.8         # a block must span this much wavelength to constrain colour
+MIN_SHAPE_POINTS = 6
+
+
+def _template_at(t: pd.DataFrame, lam: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    return np.interp(lam, t.wavelength_um, t["mean"]), np.interp(lam, t.wavelength_um, t.sigma)  # flat beyond ends
+
+
+def coverage(df: pd.DataFrame) -> dict:
+    """How much rotation-free shape information the points carry (per slew block)."""
+    d = df[(df.lam_um >= FIT_RANGE_UM[0]) & (df.lam_um <= BLOCK_FIT_MAX_UM)]
+    per_block = d.groupby("block").lam_um.agg(["count", "min", "max"])
+    per_block["span"] = per_block["max"] - per_block["min"]
+    useful = per_block[per_block["count"] >= 2]
+    return {"points": int(len(d)), "blocks": int(len(per_block)), "shape_points": int(useful["count"].sum()),
+            "max_block_span_um": float(useful.span.max()) if len(useful) else 0.0,
+            "total_span_um": float(d.lam_um.max() - d.lam_um.min()) if len(d) else 0.0,
+            "detectors": sorted(int(x) for x in d.det.unique()) if "det" in d else []}
+
+
+def sufficient(cov: dict) -> bool:
+    return cov["max_block_span_um"] >= MIN_LEVER_UM and cov["shape_points"] >= MIN_SHAPE_POINTS
+
+
+def fit_blocks(df: pd.DataFrame) -> pd.DataFrame:
+    """Rotation-robust class fit: every slew block gets its own free scale.
+
+    Points inside one block were taken within ~6 minutes, at one rotation phase, so their
+    relative fluxes carry true spectral shape; offsets *between* blocks are rotation and are
+    absorbed by the per-block scales. Only blocks with >= 2 points contribute.
+    """
+    d = df[(df.lam_um >= FIT_RANGE_UM[0]) & (df.lam_um <= BLOCK_FIT_MAX_UM) & (df.refl_err > 0)]
+    d = d[d.groupby("block").lam_um.transform("count") >= 2]
+    out = []
+    for cls, t in templates().groupby("class"):
+        chi2, n = 0.0, 0
+        for _, b in d.groupby("block"):
+            mu, sd = _template_at(t, b.lam_um.values)
+            r, e = b.refl.values, b.refl_err.values
+            c = np.sum(r * mu / e**2) / np.sum(mu**2 / e**2)
+            s2 = e**2 + (c * sd * 0.5) ** 2  # half the class spread: shape within a block varies less than across members
+            c = np.sum(r * mu / s2) / np.sum(mu**2 / s2)
+            chi2 += float(np.sum((r - c * mu) ** 2 / s2))
+            n += len(b) - 1
+        out.append({"class": cls, "complex": complex_of(cls), "chi2_red": chi2 / max(n, 1),
+                    "single_object_class": bool(t.single_object.iloc[0])})
+    res = pd.DataFrame(out).sort_values("chi2_red").reset_index(drop=True)
+    res.attrs.update(coverage(df))
+    return res
+
+
+# --- Group classification from what one planning period measures robustly --------------------
+# Boundaries come from the literature and the Bus-DeMeo templates, NOT from the validation set:
+#   albedo 0.10 separates dark (C, P/D) from bright (S, M/E) asteroids (e.g. DeMeo & Carry 2013);
+#   rotation-free colour R(2.4-3.4um)/R(0.8-1.1um): highest C-complex template 1.24, T 1.29, D 1.59 -> 1.27;
+#   among bright objects, Xe/Xc/Xn templates sit at 1.05-1.10 and S at 1.24-1.32 -> 1.15.
+ALBEDO_SPLIT = 0.10
+DARK_COLOUR_SPLIT = 1.27
+BRIGHT_COLOUR_SPLIT = 1.15
+GROUP_TO_COMPLEX = {"C": "C", "P/D": "X", "S": "S", "E/M": "X"}
+
+
+def template_colours() -> pd.DataFrame:
+    rows = []
+    for c, g in templates().groupby("class"):
+        short = g[(g.wavelength_um >= 0.8) & (g.wavelength_um <= 1.1)]["mean"].mean()
+        long_ = g[g.wavelength_um >= 2.35]["mean"].mean()
+        rows.append({"class": c, "complex": complex_of(c), "colour": long_ / short, "single": bool(g.single_object.iloc[0])})
+    return pd.DataFrame(rows).sort_values("colour").reset_index(drop=True)
+
+
+def group(colour: float | None, albedo: float | None) -> str | None:
+    """Albedo + rotation-free colour -> C, P/D, S or E/M (None when either is missing)."""
+    if colour is None or albedo is None or not np.isfinite(colour) or not np.isfinite(albedo):
+        return None
+    if albedo < ALBEDO_SPLIT:
+        return "C" if colour < DARK_COLOUR_SPLIT else "P/D"
+    return "E/M" if colour < BRIGHT_COLOUR_SPLIT else "S"
+
+
 def slope_per_um(lam, refl, lo=0.85, hi=1.7) -> float:
     """Spectral slope (fraction per um) of normalised reflectance between lo and hi."""
     lam, refl = np.asarray(lam), np.asarray(refl)

@@ -18,12 +18,28 @@ OBSERVER = "500"
 SPHEREX = "500@-163182"
 
 
+def _horizons(target, location, epochs, attempts: int = 5):
+    """Horizons query with retries: JPL returns 503 and rate-limit errors under load.
+
+    Always id_type='smallbody': Horizons reads a bare number such as "6" or "532" as a major-body
+    ID (Saturn system, a Jupiter moon), not as asteroid (6) Hebe or (532) Herculina.
+    """
+    import time
+    for i in range(attempts):
+        try:
+            return Horizons(id=target, id_type="smallbody", location=location, epochs=epochs).ephemerides()
+        except Exception as e:  # noqa: BLE001 - astroquery wraps HTTP errors in several types
+            if i == attempts - 1 or not any(s in str(e) for s in ("503", "502", "429", "timed out", "Timeout")):
+                raise
+            time.sleep(5 * 2**i)
+
+
 def horizons_track(target: str, mjd_start: float, mjd_end: float, step: str = "30m",
                    location: str = OBSERVER) -> pd.DataFrame:
     """Ephemeris on a regular grid; interpolate with `position_at` / `geometry_at`."""
-    eph = Horizons(id=target, location=location, epochs={
+    eph = _horizons(target, location, {
         "start": f"JD{mjd_start + 2400000.5:.5f}", "stop": f"JD{mjd_end + 2400000.5:.5f}", "step": step,
-    }).ephemerides()
+    })
     return pd.DataFrame({
         "mjd": np.asarray(eph["datetime_jd"], float) - 2400000.5,
         "ra": np.asarray(eph["RA"], float), "dec": np.asarray(eph["DEC"], float),
@@ -39,7 +55,7 @@ def positions_at_times(target: str, mjd, location: str = SPHEREX, chunk: int = 4
     parts = []
     for i in range(0, len(mjd), chunk):
         jd = list(mjd[i:i + chunk] + 2400000.5)
-        e = Horizons(id=target, location=location, epochs=jd).ephemerides()
+        e = _horizons(target, location, jd)
         parts.append(pd.DataFrame({"mjd": np.asarray(e["datetime_jd"], float) - 2400000.5,
                                    "ra": np.asarray(e["RA"], float), "dec": np.asarray(e["DEC"], float),
                                    "r_au": np.asarray(e["r"], float), "delta_au": np.asarray(e["delta"], float),
